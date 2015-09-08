@@ -1,5 +1,6 @@
 package com.call.kujuget0;
 
+import java.io.File;
 import java.io.IOException;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
@@ -8,12 +9,15 @@ import java.util.Vector;
 
 public class BSPredictor implements Predictor{
 	// pastDays is how many days in the past we use for the linear least square interpolation
-    public int  Nx = 11, pastDays=2, leastPoints=2, numPredictDays=3, Nt = 1+numPredictDays*10, numIter=(Nx-1)*(Nt-1), holdDays=10;
-    public double dt= 1.0/255, At=0, Bt=dt*numPredictDays, errorLevel=0.5, range=0.5, cent=0.02;
+	public int dT = 10;
+    public int  Nx = 41, pastDays=2, leastPoints=2, numPredictDays=3, Nt = 1+numPredictDays*dT, numIter=1500;//Nt*Nx, holdDays=10;
+    public double dt= 1.0/255, At=0, Bt=dt*numPredictDays, errorLevel=0.5, range=0.5, cent=0.02, volfactor = dt;
+    public double tikhon = 0.01;
 	private boolean generateTecplot=false, lastPresent=false;
 	private double realMoney = 0, potentialMoney = 0;
-	private int realProfit = 0, potentialProfit = 0;
-	
+    private int realProfit = 0, potentialProfit = 0;
+    public static volatile int upward = 0;
+
 	// file with the data
 	String filePath = Util.Path + "OptionData.csv";
 	// arrays to be used for calculations
@@ -82,11 +86,23 @@ public class BSPredictor implements Predictor{
         	bidOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONBIDPRICE.toString())]);
         	askStock[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.STOCKASKPRICE.toString())]);
         	bidStock[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.STOCKBIDPRICE.toString())]);
+        	if (bidOpt[i]>askOpt[i]) {
+        		double temp = bidOpt[i];
+        		bidOpt[i] = askOpt[i];
+        		askOpt[i]=temp;
+        	}
+        	if (bidStock[i]>askStock[i]) {
+        		double temp = bidStock[i];
+        		bidStock[i] = askStock[i];
+        		askStock[i]=temp;
+        	}
+        	
         	volatility[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.IMPLIEDVOLATILITY.toString())]);
         	if (Double.isNaN(askStock[i])) askStock[i] = askStock[i+1]; 
         	if (Double.isNaN(bidStock[i])) bidStock[i] = bidStock[i+1]; 
         	if (dates!=null) dates[i] = str[Util.IndexOfString(labelArr, FileLabel.DATE.toString())];
-        	if (lastOpt!=null) lastOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONLASTPRICE.toString())]);        	
+        	if (lastOpt!=null) lastOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONLASTPRICE.toString())]);
+        	//lastOpt[i] = bidOpt[i];
         	if (thetaOpt!=null) thetaOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.THETA.toString())]);        	
         }
         // bidStock < askStock
@@ -119,7 +135,93 @@ public class BSPredictor implements Predictor{
 	private String toStr(Double value) {
 		return String.valueOf(value);//df.format(value);
 	}
-	
+
+    public double linearStrategy() {
+        result = new DataTable(name);
+
+        realMoney=0;
+        potentialMoney=0;
+        realProfit=0;
+        potentialProfit=0;
+        try {
+            if (data==null || data.isEmpty()) data = Util.readStringsFromFile(filePath);
+        } catch (IOException e) {
+            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+            System.exit(0);
+        }
+        int amount = data.size()-1;
+        askOpt = new double[amount]; bidOpt =new double[amount]; volatility =new double[amount]; askStock =new double[amount]; bidStock =new double[amount]; lastOpt =new double[amount];thetaOpt =new double[amount]; dates =new String[amount];
+        InitData(data, askOpt, bidOpt, lastOpt, volatility, askStock, bidStock, thetaOpt, dates);
+        Vector<Integer> notSoldOptIndex = new Vector<Integer>();
+        ArrayList<Double> error = new ArrayList<Double>();
+        ArrayList<Double> profit = new ArrayList<Double>();
+        double avError = 0, real_profit = 0, potential_profit =0;
+        double[] linFunc;
+        int mod=(amount-(numPredictDays)-1)%(numPredictDays-1);
+        for (int i = amount-(numPredictDays)-1; i >=numPredictDays-1; i--) if (askStock[i] != bidStock[i] && (i%(numPredictDays-1))==mod) {
+            double Ax, Bx;
+            Ax = prolongData2(bidStock, i, i - numPredictDays);
+            Bx = prolongData2(askStock, i, i - numPredictDays);
+            if (Double.isNaN(volatility[i])||Double.isNaN(volatility[i+1]) || Double.isNaN(volatility[i+2]) || Double.isNaN(lastOpt[i-1]) || Double.isNaN(lastOpt[i-2]) ) {
+                continue;
+            }
+            for (int j=0; j<numPredictDays-1; j++) {
+                Bx = prolongData2(askStock, i, i - j-1);
+                if (Bx-askOpt[i]>cent && !Double.isNaN(lastOpt[i-1-j])) {
+                    real_profit += lastOpt[i-1-j]-askOpt[i];
+                    potential_profit += Bx-askOpt[i];
+                }
+            }
+        }
+//        System.out.println("Table "+name);
+//        System.out.println("Potential profit " + potential_profit);
+//        System.out.println("real profit " + real_profit);
+        return real_profit;
+    }
+
+    public double lastStrategy() {
+        result = new DataTable(name);
+
+        realMoney=0;
+        potentialMoney=0;
+        realProfit=0;
+        potentialProfit=0;
+        try {
+            if (data==null || data.isEmpty()) data = Util.readStringsFromFile(filePath);
+        } catch (IOException e) {
+            e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+            System.exit(0);
+        }
+        int amount = data.size()-1;
+        askOpt = new double[amount]; bidOpt =new double[amount]; volatility =new double[amount]; askStock =new double[amount]; bidStock =new double[amount]; lastOpt =new double[amount];thetaOpt =new double[amount]; dates =new String[amount];
+        InitData(data, askOpt, bidOpt, lastOpt, volatility, askStock, bidStock, thetaOpt, dates);
+        ArrayList<Double> error = new ArrayList<Double>();
+        ArrayList<Double> profit = new ArrayList<Double>();
+        double avError = 0, real_profit = 0, potential_profit =0;
+        double[] linFunc;
+        int mod=(amount-(numPredictDays)-1)%(numPredictDays-1);
+        for (int i = amount-(numPredictDays)-1; i >=numPredictDays-1; i--) if (askStock[i] != bidStock[i] && (i%(numPredictDays-1))==mod) {
+            double Ax, Bx;
+            if (Double.isNaN(lastOpt[i+1]) || Double.isNaN(lastOpt[i+2]) || Double.isNaN(lastOpt[i])) {
+                continue;
+            }
+            Bx = prolongData2(lastOpt, i, i-1);
+
+            if (Bx-askOpt[i]>cent && !Double.isNaN(lastOpt[i-1])) {
+                real_profit += lastOpt[i-1]-askOpt[i];
+                potential_profit += Bx-askOpt[i];
+            }
+        }
+//        System.out.println("Table "+name);
+//        System.out.println("Potential profit " + potential_profit);
+//        System.out.println("real profit " + real_profit);
+        return real_profit;
+    }
+
+    public double getRealMoney() {
+        return realMoney;
+    }
+
 	@Override
 	public DataTable predict() {
 		
@@ -138,6 +240,7 @@ public class BSPredictor implements Predictor{
         int amount = data.size()-1;
         askOpt = new double[amount]; bidOpt =new double[amount]; volatility =new double[amount]; askStock =new double[amount]; bidStock =new double[amount]; lastOpt =new double[amount];thetaOpt =new double[amount]; dates =new String[amount];
         InitData(data, askOpt, bidOpt, lastOpt, volatility, askStock, bidStock, thetaOpt, dates);        
+        
         if (!lastPresent) {
     		result.AddHeaders(Arrays.asList("PREDICT DATES","ASK PRICE YESTERDAY","PRICE(PREDICT)","POTENTIAL GAIN"));
         } else {
@@ -156,10 +259,6 @@ public class BSPredictor implements Predictor{
         //for the time fwd flow
         int mod=(amount-(numPredictDays)-1)%(numPredictDays-1);
         for (int i = amount-(numPredictDays)-1; i >=numPredictDays-1; i--) if (askStock[i] != bidStock[i] && (i%(numPredictDays-1))==mod) {
-        	
-        	     	
-        	
-        
             double Ax, Bx;
             Ax = prolongData(bidStock, i, i-numPredictDays);
             Bx = prolongData(askStock, i, i-numPredictDays);
@@ -187,7 +286,7 @@ public class BSPredictor implements Predictor{
             	for (int k = 0; k < Nx; k++) {
                     // change of variables x -> (x-Ax)/(Bx-Ax)
                     double x = Ax + (Bx-Ax)*hx*k;                    
-                    c[j][k] = 2.0*(Bx-Ax)*(Bx-Ax)/(x*x*vol*dt);					
+                    c[j][k] = 2.0*(Bx-Ax)*(Bx-Ax)/(x*x*vol*vol*volfactor);
 				}
             }
 
@@ -203,17 +302,17 @@ public class BSPredictor implements Predictor{
 
             for (int j = 0; j < Nt; j++) {
             	double now = At + ht*j;
-//              bound[j][Nx-1] = Util.linear(At, askOpt[i], Bt, askPredict, now);
-//              bound[j][0] = Util.linear(At, bidOpt[i], Bt, bidPredict, now);
-              bound[j][Nx-1] = Util.linear(At, askOpt[i], Bt, askPredict, now);
-              bound[j][0] = Util.linear(At, bidOpt[i], Bt, bidPredict, now);
+            	//bound[j][Nx-1] = Util.linear(At, askOpt[i], Bt, askPredict, now);
+            	//bound[j][0] = Util.linear(At, bidOpt[i], Bt, bidPredict, now);
+            	bound[j][Nx-1] = Util.quadratic(At, askOpt[i], Bt, askPredict, At-ht*dT, askOpt[i+1], now);
+            	bound[j][0] = Util.quadratic(At, bidOpt[i], Bt, bidPredict, At-ht*dT, bidOpt[i+1], now);
             }
             for (int j = 0; j < Nx; j++) {
                 bound[0][j] = Util.linear(0, bound[0][0], 1, bound[0][Nx-1], hx*j);
                 //calc[Nx-1][j] = Util.linear(0, calc[Nt-1][0], 1, calc[Nt-1][Nx-1], g.interval_x[j]);
             }
             //CalcRightSide(c, bound, rightSide, Nt-1, Nx-1, ht, hx);
-            double tikhon = 0.01;
+            
             Functional L=new L(g, c, rightSide);
             Functional Ht=new Ht(g);
             Functional Hx=new Hx(g);
@@ -223,8 +322,8 @@ public class BSPredictor implements Predictor{
             Functional J=new J(g,new Functional[]{L,L2,Ht,Hx,Hxx},
                     new double[]{1,tikhon,tikhon,tikhon,tikhon,tikhon});
             Inverse invSolver = new Inverse(g);
-            //invSolver.SetLog(true);
-            invSolver.iteratePartially(J, calc, numIter, 1E-12, ind,bound);            
+            //invSolver.setLog(true);
+            invSolver.iteratePartially(J, calc, numIter, 1E-8, ind,bound);
             ratio = (lastOpt[i]-bidOpt[i])/(askOpt[i]-bidOpt[i]);
             // Check the option that we bought but didnt sell
             Vector<Integer> removeIndex = new Vector<Integer>();
@@ -251,13 +350,23 @@ public class BSPredictor implements Predictor{
                 if (choice-askOpt[i]>cent) {
                 	if (lastPresent) {
                 		if (Double.isNaN(lastOpt[i-1-j])) {
+                			//lastOpt[i-1-j] = bidOpt[i-1-j];
                 			notSoldOptIndex.add(i-1-j);
                 			continue;
                 		}
                 		potentialProfit += 1;
                 		//error.add(lastOpt[i-1-j]);
                 		avError += Math.abs((lastOpt[i-1-j]-choice)/lastOpt[i-1-j]);
-                		if (lastOpt[i-1-j]-askOpt[i]>0) realProfit += 1;
+                		if (lastOpt[i-1-j]-askOpt[i]>0) {
+                			realProfit += 1;
+//                            File file = new File(name);
+//                            double[] tmp = Util.linearPartition(0, 1, Nx);
+//                            Util.generateTecplotFile( tmp, calc[dT*(j+1)], file.getName() + realProfit+"_soln_profit.dat");
+//                            Util.generateTecplotFile( tmp, Util.linearPartition(calc[dT*(j+1)][0], calc[dT*(j+1)][Nx-1], Nx), file.getName() + realProfit+"_tmr_profit.dat");
+//                            Util.generateTecplotFile( tmp, Util.linearPartition(calc[0][0], calc[0][Nx-1], Nx), file.getName() + realProfit+"_tdy_profit.dat");
+//                            System.out.println("Last price "+ file.getName() + realProfit+"_profit = " + lastOpt[i-1-j]);
+                        } else {
+                		}
                         //result.AddRow(Arrays.asList(dates[i-j-1], toStr(askOpt[i]), toStr(choice), toStr(lastOpt[i-1-j]), toStr(choice-askOpt[i]), toStr(lastOpt[i-1-j]-askOpt[i])));
                         potentialMoney += (choice-askOpt[i]);
                         realMoney += (lastOpt[i-1-j]-askOpt[i]);                		
@@ -267,16 +376,6 @@ public class BSPredictor implements Predictor{
                     	potentialProfit += 1;                		
                 	}
                 }
-
-//                if (lastOpt[i-1-j]<bidOpt[i]) {
-//                	boolean made = choice<bidOpt[i];
-//                	if (made) text.append(dates[i-1-j] + " \t Bid Arbitrage "+ toStr(bidOpt[i]-lastOpt[i-1-j])+ " \t Bid "+ toStr(bidOpt[i]) + " \t Predict NextDay " + toStr(choice) +  " \t Mid NextDay " + toStr(0.5*(calc[now][0]+calc[now][Nx-1])) + " \t Possible Profit "+ made+" \t Last NextDay "+ toStr(lastOpt[i-1-j]) +Util.EOL);
-//                }
-//                if (lastOpt[i-1-j]>askOpt[i]) {
-//                	boolean made=choice>askOpt[i];
-//                	if (made) text.append(dates[i-1-j] + " \t Ask Arbitrage "+ toStr(lastOpt[i-1-j]-askOpt[i])+ " \t Ask "+ toStr(askOpt[i]) + " \t Predict NextDay " + toStr(choice) + " \t Mid NextDay " + toStr(0.5*(calc[now][0]+calc[now][Nx-1])) + " \t Possible Profit "+ made+ " \t Last NextDay "+ toStr(lastOpt[i-1-j]) +Util.EOL);
-//                }
-                
             }            
         }
         int i=0;
