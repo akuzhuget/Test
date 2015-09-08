@@ -12,6 +12,14 @@ public class Util {
 
     final static  String EOL = System.getProperty("line.separator");
     
+    public static double[] linearPartition(double min, double max, int num) {
+        double[] result = new double[num];
+        double h = (max - min)/(num-1);
+        for (int i=0; i<num; i++) result[i] = min + h*i;
+
+        return result;
+    }
+    
     public static double StringToDoubleSafe(String input) {
     	double result = Double.NaN;
     	try {
