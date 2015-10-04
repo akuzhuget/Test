@@ -20,6 +20,14 @@ public class Util {
         return result;
     }
     
+    public static double StringToDoubleSafe(String[] input, int index) {
+    	if (index>=input.length) {
+    		return Double.NaN;
+    	} else {
+    		return StringToDoubleSafe(input[index]);
+    	}
+    }
+    
     public static double StringToDoubleSafe(String input) {
     	double result = Double.NaN;
     	try {
