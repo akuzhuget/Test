@@ -63,7 +63,7 @@ public class BSPredictor implements Predictor{
 	public void SetGenerateTecplot(boolean generate) {
 		generateTecplot = generate;
 	}
-	
+
     public void InitData(ArrayList<String> data, double[] askOpt,double[] bidOpt,double[] lastOpt,double[] volatility,double[] askStock,double[] bidStock,double[] thetaOpt, String[] dates) {    	
         // Init the data
         // check that all the needed data is there
@@ -71,21 +71,50 @@ public class BSPredictor implements Predictor{
         String[] labelArr = data.get(0).toUpperCase().split(",");
         String filelabels = data.get(0).toUpperCase().replaceAll("\\s", "");        
         if (!filelabels.contains(FileLabel.DATE.toString())) dates= null;
-        if (!filelabels.contains(FileLabel.OPTIONLASTPRICE.toString())) lastOpt= null;
+        if (!filelabels.contains(FileLabel1.LASTPRICE.toString())) lastOpt= null;
         if (!filelabels.contains(FileLabel.THETA.toString())) thetaOpt= null;
+        boolean newLabels = false;
         for (FileLabel label:FileLabel.values()) {        	
         	if (label.isNeededInFile()  && !filelabels.contains(label.toString())) {
-        		System.out.println(" Data file doesnt contain " + label.toString() + "Exiting ... ");
-        		System.exit(0);
+        		newLabels = true;
+        		break;
+        		//System.out.println(name + " file doesnt contain " + label.toString() + "Exiting ... ");
+        		//System.exit(0);        		
         	}        	
+        }
+        HashMap<FileLabel, Integer> labelMap = new HashMap<>();
+        labelMap.put(FileLabel.IMPLIEDVOLATILITY, Util.IndexOfString(labelArr, FileLabel.IMPLIEDVOLATILITY.toString()));
+        labelMap.put(FileLabel.DATE, Util.IndexOfString(labelArr, FileLabel.DATE.toString()));
+        labelMap.put(FileLabel.OPTIONLASTPRICE, Util.IndexOfString(labelArr, FileLabel1.LASTPRICE.toString()));
+        if (newLabels) {
+        	for (int i=0; i<labelArr.length; i++) {
+        		String str = labelArr[i].toUpperCase().replaceAll("\\s", ""); 
+        		if (str.contains("/") && str.contains(FileLabel1.ASKPRICE.toString())) {
+        			labelMap.put(FileLabel.OPTIONASKPRICE, i);
+        		}
+        		if (!str.contains("/") && str.contains(FileLabel1.ASKPRICE.toString())) {
+        			labelMap.put(FileLabel.STOCKASKPRICE, i);
+        		}
+        		if (str.contains("/") && str.contains(FileLabel1.BIDPRICE.toString())) {
+        			labelMap.put(FileLabel.OPTIONBIDPRICE, i);
+        		}
+        		if (!str.contains("/") && str.contains(FileLabel1.BIDPRICE.toString())) {
+        			labelMap.put(FileLabel.STOCKBIDPRICE, i);
+        		}        		
+        	}        	
+        } else {
+        	labelMap.put(FileLabel.OPTIONASKPRICE, Util.IndexOfString(labelArr, FileLabel.OPTIONASKPRICE.toString()));
+        	labelMap.put(FileLabel.STOCKASKPRICE, Util.IndexOfString(labelArr, FileLabel.STOCKASKPRICE.toString()));
+        	labelMap.put(FileLabel.OPTIONBIDPRICE, Util.IndexOfString(labelArr, FileLabel.OPTIONBIDPRICE.toString()));
+        	labelMap.put(FileLabel.STOCKBIDPRICE, Util.IndexOfString(labelArr, FileLabel.STOCKBIDPRICE.toString()));
         }
         lastPresent = !(lastOpt==null);
         for (int i = 0; i < amount; i++) {
         	String[] str = data.get(1+i).split(",");        	
-        	askOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONASKPRICE.toString())]);
-        	bidOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONBIDPRICE.toString())]);
-        	askStock[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.STOCKASKPRICE.toString())]);
-        	bidStock[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.STOCKBIDPRICE.toString())]);
+        	askOpt[i] = Util.StringToDoubleSafe(str, labelMap.get(FileLabel.OPTIONASKPRICE));
+        	bidOpt[i] = Util.StringToDoubleSafe(str,labelMap.get(FileLabel.OPTIONBIDPRICE));
+        	askStock[i] = Util.StringToDoubleSafe(str,labelMap.get(FileLabel.STOCKASKPRICE));
+        	bidStock[i] = Util.StringToDoubleSafe(str,labelMap.get(FileLabel.STOCKBIDPRICE));
         	if (bidOpt[i]>askOpt[i]) {
         		double temp = bidOpt[i];
         		bidOpt[i] = askOpt[i];
@@ -97,13 +126,13 @@ public class BSPredictor implements Predictor{
         		askStock[i]=temp;
         	}
         	
-        	volatility[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.IMPLIEDVOLATILITY.toString())]);
+        	volatility[i] = Util.StringToDoubleSafe(str, labelMap.get(FileLabel.IMPLIEDVOLATILITY));
         	if (Double.isNaN(askStock[i])) askStock[i] = askStock[i+1]; 
         	if (Double.isNaN(bidStock[i])) bidStock[i] = bidStock[i+1]; 
-        	if (dates!=null) dates[i] = str[Util.IndexOfString(labelArr, FileLabel.DATE.toString())];
-        	if (lastOpt!=null) lastOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.OPTIONLASTPRICE.toString())]);
+        	if (dates!=null) dates[i] = str[labelMap.get(FileLabel.DATE)];
+        	if (lastOpt!=null) lastOpt[i] = Util.StringToDoubleSafe(str, labelMap.get(FileLabel.OPTIONLASTPRICE));
         	//lastOpt[i] = bidOpt[i];
-        	if (thetaOpt!=null) thetaOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.THETA.toString())]);        	
+        	//if (thetaOpt!=null) thetaOpt[i] = Util.StringToDoubleSafe(str[Util.IndexOfString(labelArr, FileLabel.THETA.toString())]);        	
         }
         // bidStock < askStock
         for (int i = 0; i < amount; i++) if (askStock[i] < bidStock[i]) {
@@ -113,6 +142,7 @@ public class BSPredictor implements Predictor{
         }
 
     }
+	
     private double prolongData(double[] y, int index, int indexToPredict) {
     	return y[index];
     	//return prolongData2(y, index);
